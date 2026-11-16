@@ -1,0 +1,97 @@
+{{define "page" -}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{.CSRF}}">
+<title>Standby toggle</title>
+<link rel="stylesheet" href="/static/style.css?v={{.Version}}">
+<script src="/static/app.js?v={{.Version}}" defer></script>
+</head>
+<body>
+<header>
+  <h1>Standby toggle</h1>
+  <div class="who">
+    {{- if .AuthDisabled}}<span class="warn">authentication disabled</span>
+    {{- else}}<span>{{.User}}</span>
+    <form method="post" action="/auth/logout"><input type="hidden" name="csrf_token" value="{{.CSRF}}"><button class="link">Sign out</button></form>
+    {{- end}}
+  </div>
+</header>
+<p id="message" role="status" hidden></p>
+<main id="groups">{{template "groups" .}}</main>
+<footer>k8s-app-standby-toggle {{.Version}} · this page refreshes itself · last refresh <span id="updated">at load</span></footer>
+</body>
+</html>
+{{- end}}
+
+{{define "groups" -}}
+{{if .Status.LastError}}<p class="banner error">The last reconcile had a problem: {{.Status.LastError}}</p>{{end}}
+<table class="groups">
+<thead><tr><th>Group</th><th>Applications</th><th>State</th><th>Controls</th></tr></thead>
+<tbody>
+{{- range .Groups}}
+{{- $g := .}}
+<tr data-group="{{.Name}}" class="phase-{{.Phase}}">
+  <td class="name"><strong>{{.Name}}</strong><br><span class="muted">default: {{.Default}}</span></td>
+  <td class="apps">
+    {{- range .Apps}}<span class="app{{if isMissing $g.Missing .}} missing{{end}}">{{.}}{{if isMissing $g.Missing .}} (missing){{end}}</span> {{end}}
+    {{- if .Resources}}
+    <details><summary>{{len .Resources}} resource{{if ne (len .Resources) 1}}s{{end}}</summary>
+      <ul class="resources">
+      {{- range .Resources}}
+        <li class="res-{{.State}}">{{.Kind}} {{.Namespace}}/{{.Name}}:
+          {{- if .Skipped}} skipped ({{.Skipped}})
+          {{- else if .Suspended}} suspended
+          {{- else if eq .Kind "CronJob"}} active
+          {{- else}} {{.Ready}}/{{.Replicas}} ready{{end}}</li>
+      {{- end}}
+      </ul>
+    </details>
+    {{- end}}
+  </td>
+  <td class="state">
+    <span class="badge {{.Phase}}">{{.Phase}}</span>
+    <div class="reason">
+    {{- if .Conflict}}conflict: {{.Conflict.Reason}}
+    {{- else if eq .Source "always-on"}}always on
+    {{- else if eq .Source "hold"}}held: {{.Hold.Reason}} <span class="muted">(until <time datetime="{{iso .Hold.Expires}}">{{clock .Hold.Expires}}</time>, by {{.Hold.By}})</span>
+    {{- else if eq .Source "lease"}}kept awake by {{if gt (len .Leases) 1}}leases{{else}}lease{{end}} {{owners .Leases}} until <time datetime="{{iso (lastExpiry .Leases)}}">{{clock (lastExpiry .Leases)}}</time>
+    {{- else if eq .Source "override"}}
+      {{- if eq .Override.State "awake"}}awake until <time datetime="{{iso .Override.Expires}}">{{clock .Override.Expires}}</time>, woken by {{.Override.By}}
+      {{- else}}asleep{{with .Override.Expires}} until <time datetime="{{iso .}}">{{clock .}}</time>{{end}}, put to sleep by {{.Override.By}}{{end}}
+    {{- else}}{{.Desired}} by default{{end}}
+    </div>
+    {{- if and .Hold (ne .Source "hold")}}<div class="muted">hold: {{.Hold.Reason}}</div>{{end}}
+    {{- if and .Leases (ne .Source "lease")}}<div class="muted">leases: {{owners .Leases}}</div>{{end}}
+    {{- if and .Override (ne .Source "override")}}<div class="muted">override: {{.Override.State}} by {{.Override.By}}</div>{{end}}
+    {{- range .Errors}}<div class="error">{{.}}</div>{{end}}
+  </td>
+  <td class="controls">
+  {{- if eq .Default "always-on"}}<span class="muted">—</span>
+  {{- else}}
+    <div class="buttons">
+      {{- range $.WakeDurations}}<button data-action="wake" data-ttl="{{short .}}">Wake {{short .}}</button>{{end}}
+      <button data-action="sleep">Sleep</button>
+      {{- if .Override}}<button data-action="default">Back to default</button>{{end}}
+      {{- if .Hold}}<button data-action="unhold">Lift hold</button>{{end}}
+      {{- range .Leases}}<button data-action="release" data-owner="{{.Owner}}">Release lease {{.Owner}}</button>{{end}}
+      {{- if .Conflict}}<button data-action="clear-conflict" class="primary">Clear conflict and retry</button>{{end}}
+    </div>
+    {{- if not .Hold}}
+    <form class="hold" data-action="hold">
+      <input name="reason" placeholder="Hold reason" maxlength="500" required aria-label="Hold reason for {{.Name}}">
+      <select name="ttl" aria-label="Hold duration for {{.Name}}">
+        {{- range $.HoldDurations}}<option value="{{short .}}"{{if eq . $.HoldDefault}} selected{{end}}>{{short .}}</option>{{end}}
+      </select>
+      <button>Hold</button>
+    </form>
+    {{- end}}
+  {{- end}}
+  </td>
+</tr>
+{{- end}}
+</tbody>
+</table>
+{{- end}}

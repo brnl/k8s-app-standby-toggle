@@ -1,0 +1,186 @@
+{{- include "standby.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "standby.fullname" . }}
+  labels:
+    {{- include "standby.labels" . | nindent 4 }}
+spec:
+  # Always exactly one replica: the service has no leader election.
+  replicas: 1
+  strategy:
+    type: Recreate
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      {{- include "standby.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Restart when the groups change.
+        checksum/groups: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "standby.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "standby.serviceAccountName" . }}
+      # The service talks to the Kubernetes API with its ServiceAccount.
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: k8s-app-standby-toggle
+          image: {{ include "standby.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: STANDBY_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: STANDBY_GROUPS_FILE
+              value: /etc/k8s-app-standby-toggle/groups/groups.json
+            - name: STANDBY_STATE_CONFIGMAP
+              value: {{ include "standby.stateConfigMap" . | quote }}
+            - name: STANDBY_ARGOCD_NAMESPACE
+              value: {{ .Values.argocd.namespace | quote }}
+            - name: STANDBY_RECONCILE_INTERVAL
+              value: {{ .Values.reconcileInterval | quote }}
+            - name: STANDBY_WAKE_DURATIONS
+              value: {{ join "," .Values.wakeDurations | quote }}
+            - name: STANDBY_HOLD_DEFAULT
+              value: {{ .Values.hold.defaultDuration | quote }}
+            - name: STANDBY_HOLD_MAX
+              value: {{ .Values.hold.maxDuration | quote }}
+            - name: STANDBY_LEASE_MAX
+              value: {{ .Values.lease.maxDuration | quote }}
+            - name: STANDBY_DEGRADED_AFTER
+              value: {{ .Values.degradedAfter | quote }}
+            - name: STANDBY_DATABASE_WAIT
+              value: {{ .Values.databaseWait | quote }}
+            - name: STANDBY_CONFLICT_THRESHOLD
+              value: {{ .Values.conflict.threshold | quote }}
+            - name: STANDBY_CONFLICT_WINDOW
+              value: {{ .Values.conflict.window | quote }}
+            - name: STANDBY_ANNOTATION_PREFIX
+              value: {{ .Values.annotationPrefix | quote }}
+            - name: STANDBY_LISTEN_ADDR
+              value: {{ printf ":%d" (int .Values.containerPort) | quote }}
+            - name: STANDBY_OIDC_ISSUER_URL
+              value: {{ .Values.oidc.issuerURL | quote }}
+            - name: STANDBY_OIDC_CLIENT_ID
+              value: {{ .Values.oidc.clientID | quote }}
+            - name: STANDBY_OIDC_REDIRECT_URL
+              value: {{ include "standby.redirectURL" . | quote }}
+            - name: STANDBY_OIDC_ALLOWED_GROUPS
+              value: {{ join "," .Values.oidc.allowedGroups | quote }}
+            - name: STANDBY_OIDC_ALLOW_ANY_USER
+              value: {{ .Values.oidc.allowAnyUser | quote }}
+            {{- if or .Values.oidc.ca.configMap .Values.oidc.ca.secret }}
+            - name: STANDBY_OIDC_CA_FILE
+              value: /etc/k8s-app-standby-toggle/oidc-ca/ca.crt
+            {{- end }}
+            - name: STANDBY_SESSION_TTL
+              value: {{ .Values.oidc.sessionTTL | quote }}
+            {{- if .Values.oidc.sessionKeySecret.name }}
+            - name: STANDBY_SESSION_KEY_FILE
+              value: /etc/k8s-app-standby-toggle/session/session-key
+            {{- end }}
+            - name: STANDBY_MACHINE_AUDIENCE
+              value: {{ .Values.machineAuth.audience | quote }}
+            - name: STANDBY_MACHINE_SUBJECTS
+              value: {{ join "," .Values.machineAuth.subjects | quote }}
+            - name: STANDBY_LOG_LEVEL
+              value: {{ .Values.log.level | quote }}
+            - name: STANDBY_LOG_FORMAT
+              value: {{ .Values.log.format | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+              protocol: TCP
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: groups
+              mountPath: /etc/k8s-app-standby-toggle/groups
+              readOnly: true
+            {{- if or .Values.oidc.ca.configMap .Values.oidc.ca.secret }}
+            - name: oidc-ca
+              mountPath: /etc/k8s-app-standby-toggle/oidc-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.oidc.sessionKeySecret.name }}
+            - name: session-key
+              mountPath: /etc/k8s-app-standby-toggle/session
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: groups
+          configMap:
+            name: {{ include "standby.fullname" . }}-groups
+        {{- with .Values.oidc.ca }}
+        {{- if .configMap }}
+        - name: oidc-ca
+          configMap:
+            name: {{ .configMap }}
+            items:
+              - key: {{ .key }}
+                path: ca.crt
+        {{- else if .secret }}
+        - name: oidc-ca
+          secret:
+            secretName: {{ .secret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .key }}
+                path: ca.crt
+        {{- end }}
+        {{- end }}
+        {{- with .Values.oidc.sessionKeySecret }}
+        {{- if .name }}
+        - name: session-key
+          secret:
+            secretName: {{ .name }}
+            defaultMode: 0440
+            items:
+              - key: {{ .key }}
+                path: session-key
+        {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

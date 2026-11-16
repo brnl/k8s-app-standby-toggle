@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CHART: charts/k8s-app-standby-toggle
+  HELM_VERSION: v4.3.2
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: test -z "$(gofmt -l . | tee /dev/stderr)"
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race -count=1 ./...
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Chart version
+        run: |
+          version=$(./hack/chart-version.sh)
+          if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null; then
+            echo "::notice title=No release::v${version} already exists; bump the version in Chart.yaml to release this change."
+          else
+            echo "::notice title=Release::Merging to main releases v${version}."
+          fi
+      - name: helm lint
+        run: |
+          for f in "$CHART"/ci/*-values.yaml; do
+            helm lint --strict "$CHART" -f "$f"
+          done
+      - name: Invalid values are rejected
+        run: |
+          base="-f $CHART/ci/default-values.yaml"
+          fail() { if helm template test "$CHART" "$@" >/dev/null 2>&1; then echo "::error::accepted: $*"; exit 1; fi; }
+          fail                                                      # no groups, no OIDC
+          fail $base --set dnsserver=1.1.1.1                       # unknown key
+          fail $base --set groups.vikunja.default=on               # not a default
+          fail $base --set groups.vikunja.default=true             # unquoted on/off in YAML
+          fail $base --set groups.other.default=awake --set 'groups.other.apps[0]=vikunja'  # app in two groups
+          fail $base --set-json 'groups.empty={"default":"awake","apps":[]}'                # empty group
+          fail $base --set-json 'groups.Bad_Name={"default":"awake","apps":["x"]}'
+          fail $base --set oidc.issuerURL=
+          fail $base --set oidc.issuerURL=http://auth.example.com
+          fail $base --set oidc.redirectURL=
+          fail $base --set-json 'oidc.allowedGroups=[]'
+          fail $base --set oidc.ca.configMap=a --set oidc.ca.secret=b
+          fail $base --set httpRoute.enabled=true
+          fail $base --set reconcileInterval=30
+          fail $base --set-json 'machineAuth.subjects=["ci-runner"]'
+      - name: kubeconform
+        run: |
+          for f in "$CHART"/ci/*-values.yaml; do
+            helm template test "$CHART" -f "$f"
+          done | go run github.com/yannh/kubeconform/cmd/kubeconform@v0.8.0 \
+            -strict -summary -kubernetes-version 1.37.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: k8s-app-standby-toggle:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        run: |
+          docker run --rm k8s-app-standby-toggle:ci version
+          # Missing configuration must fail fast.
+          ! docker run --rm k8s-app-standby-toggle:ci
+      - name: Scan image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: k8s-app-standby-toggle:ci
+          version: v0.76.2
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: k8s-app-standby-toggle:e2e
+          build-args: VERSION=e2e
+          cache-from: type=gha
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Create kind cluster
+        uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with:
+          version: v0.33.0
+          node_image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+          kubectl_version: v1.37.2
+          cluster_name: e2e
+          wait: 120s
+      - name: Load image
+        run: kind load docker-image k8s-app-standby-toggle:e2e --name e2e
+      - name: End-to-end test
+        env:
+          IMAGE: k8s-app-standby-toggle:e2e
+          # The Argo CD version the homelab runs; only its CRD is installed.
+          ARGOCD_CRD: https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/crds/application-crd.yaml
+        run: ./test/e2e/run.sh

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: k8s-app-standby-toggle
+description: Puts groups of Argo CD Applications to sleep (scaled to zero) and wakes them again, to save memory on a development cluster
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - argocd
+  - scale-to-zero
+  - standby
+  - cloudnative-pg
+  - development
+home: https://github.com/brnl/k8s-app-standby-toggle
+sources:
+  - https://github.com/brnl/k8s-app-standby-toggle

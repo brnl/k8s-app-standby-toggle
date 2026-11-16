@@ -1,0 +1,197 @@
+# -- Groups of Argo CD Applications that sleep and wake together: a map of
+# group name (a-z, 0-9, -) to its `default` and its `apps` (Argo CD
+# Application names). An Application belongs to at most one group.
+# `default` is one of:
+#   always-on  never sleeps; shown without controls, the API refuses changes
+#   awake      runs unless someone puts it to sleep
+#   asleep     sleeps unless something wakes it
+# This shape is a contract: the homelab pipeline reads the same key.
+groups: {}
+#  identity:
+#    default: always-on
+#    apps: [lldap, authelia-infra, authelia, authelia-valkey]
+#  vikunja:
+#    default: awake
+#    apps: [vikunja, vikunja-infra]
+#  nextcloud:
+#    default: asleep
+#    apps: [nextcloud, nextcloud-infra, nextcloud-valkey]
+
+argocd:
+  # -- Namespace of the Argo CD Applications. Never touched.
+  namespace: argocd
+
+# -- How often every group is reconciled (also right after each change, and
+# every 5s while a group is waking or sleeping).
+reconcileInterval: 30s
+# -- The durations a person can wake a group for (the auto-snooze).
+wakeDurations: [1h, 4h, 24h]
+hold:
+  # -- Duration of a hold when the request does not give one.
+  defaultDuration: 24h
+  # -- Longest hold allowed.
+  maxDuration: 24h
+lease:
+  # -- Longest lease a machine may take or renew.
+  maxDuration: 4h
+# -- How long a group may be waking before it is reported as degraded.
+degradedAfter: 10m
+# -- How long to wait for CloudNativePG clusters to be ready before waking
+# the rest of a group anyway (and, when sleeping, for the rest to be gone
+# before hibernating the databases).
+databaseWait: 5m
+conflict:
+  # -- A group is marked as in conflict (and left alone) when resources the
+  # service put to sleep are found awake this many times...
+  threshold: 3
+  # -- ...within this window.
+  window: 10m
+# -- Prefix of the annotations that record previous values on the objects.
+annotationPrefix: k8s-app-standby-toggle.cloud64.net/
+
+# People sign in with OpenID Connect (authorization code flow with PKCE, as a
+# public client: there is no client secret).
+oidc:
+  # -- Issuer URL (required), e.g. https://auth.example.com.
+  issuerURL: ""
+  # -- Client ID registered at the issuer (public client, PKCE S256,
+  # token_endpoint_auth_method none, scopes openid profile groups).
+  clientID: k8s-app-standby-toggle
+  # -- Redirect URL registered at the issuer. Defaults to
+  # https://<first httpRoute hostname>/auth/callback.
+  redirectURL: ""
+  # -- Groups (from the userinfo `groups` claim) that may use the service.
+  allowedGroups: []
+  # -- Allow every authenticated user when allowedGroups is empty.
+  allowAnyUser: false
+  # CA certificate(s) of the issuer, for a self-signed issuer. Set at most
+  # one of configMap and secret; key is the PEM file in it.
+  ca:
+    configMap: ""
+    secret: ""
+    key: ca.crt
+  # -- How long a sign-in lasts.
+  sessionTTL: 12h
+  # Secret holding the key that signs session cookies (at least 32 bytes).
+  # Empty: a random key per start, so a restart signs everyone out.
+  sessionKeySecret:
+    name: ""
+    key: session-key
+
+# Machines authenticate with a Kubernetes ServiceAccount token, checked with a
+# TokenReview.
+machineAuth:
+  # -- Audience the tokens must be issued for
+  # (`kubectl create token <sa> --audience k8s-app-standby-toggle`).
+  audience: k8s-app-standby-toggle
+  # -- ServiceAccounts that may use the API, e.g.
+  # system:serviceaccount:ci-runner:ci-runner.
+  subjects: []
+
+log:
+  level: info # debug, info, warn, error
+  format: json # json, text
+
+# -- Additional environment variables for the container.
+extraEnv: []
+
+image:
+  repository: ghcr.io/brnl/k8s-app-standby-toggle
+  # -- Defaults to the chart appVersion.
+  tag: ""
+  # -- Pin the image by digest (takes precedence over tag), e.g. "sha256:...".
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+containerPort: 8080
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+# Gateway API HTTPRoute for the UI and the API. It routes /, /api/, /auth/,
+# /ui/ and /static/ only; /metrics, /healthz and /readyz stay in the cluster.
+httpRoute:
+  enabled: false
+  annotations: {}
+  labels: {}
+  # -- Gateways to attach to (required when enabled).
+  parentRefs: []
+  #  - name: gateway
+  #    namespace: gateway-system
+  #    sectionName: https
+  hostnames: []
+  #  - standby.example.com
+
+metrics:
+  serviceMonitor:
+    # -- Create a Prometheus Operator ServiceMonitor.
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+    annotations: {}
+    relabelings: []
+    metricRelabelings: []
+
+serviceAccount:
+  # -- Name of the ServiceAccount the chart creates (defaults to the full
+  # name).
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 96Mi
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Uses /healthz rather than /readyz so the UI stays reachable (and shows the
+# error) while the Kubernetes API is unreachable.
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 10
+  timeoutSeconds: 5
+
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+revisionHistoryLimit: 3

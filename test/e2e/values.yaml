@@ -1,0 +1,18 @@
+groups:
+  demo:
+    default: asleep
+    apps: [demo]
+  platform:
+    default: always-on
+    apps: [platform]
+reconcileInterval: 5s
+oidc:
+  # Never contacted in this test: discovery happens at the first login.
+  issuerURL: https://auth.invalid
+  redirectURL: https://standby.invalid/auth/callback
+  allowedGroups: [admins]
+machineAuth:
+  subjects:
+    - system:serviceaccount:ci:ci
+log:
+  level: debug
