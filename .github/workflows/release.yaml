@@ -128,22 +128,41 @@ jobs:
         run: |
           gh release create "v${VERSION}" "dist/${CHART_NAME}-${VERSION}.tgz" \
             --target "$GITHUB_SHA" --title "v${VERSION}" --generate-notes
-      - name: Check that the chart and image are public
+
+  # The homelab renders the chart without credentials, so the released chart
+  # and image must be pullable anonymously. Runs after every push to main
+  # (for the current Chart.yaml version), not only after a new release.
+  public:
+    needs: [version, image, release]
+    if: ${{ !cancelled() && needs.image.result == 'success' && (needs.release.result == 'success' || needs.release.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: Chart and image can be pulled anonymously
         run: |
-          # The homelab renders the chart without credentials. New GHCR
-          # packages may start private; then make them public once in the
-          # package settings.
-          helm registry logout ghcr.io >/dev/null 2>&1 || true
           ok=true
-          if ! helm pull "${CHART_REPO}/${CHART_NAME}" --version "${VERSION}" -d /tmp/public-check >/dev/null 2>&1; then
-            echo "::warning title=Chart not public::${CHART_REPO}/${CHART_NAME} cannot be pulled anonymously. Make the package 'charts/${CHART_NAME}' public at https://github.com/users/${{ github.repository_owner }}/packages/container/package/charts%2F${CHART_NAME}/settings"
+          # helm pull does not create its destination directory.
+          dest=$(mktemp -d)
+          if helm pull "${CHART_REPO}/${CHART_NAME}" --version "${VERSION}" -d "$dest"; then
+            echo "Chart ${CHART_REPO}/${CHART_NAME}:${VERSION} is public." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error title=Chart not public::${CHART_REPO}/${CHART_NAME} ${VERSION} cannot be pulled anonymously. Make the package 'charts/${CHART_NAME}' public in its package settings on GitHub, then re-run this job."
             ok=false
           fi
-          token=$(curl -fsS "https://ghcr.io/token?scope=repository:${{ github.repository }}:pull" | jq -r .token)
-          if ! curl -fsS -o /dev/null -H "Authorization: Bearer ${token}" \
+          repo="${IMAGE#ghcr.io/}"
+          token=$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)
+          if curl -fsS -o /dev/null -H "Authorization: Bearer ${token}" \
                -H "Accept: application/vnd.oci.image.index.v1+json" \
-               "https://ghcr.io/v2/${{ github.repository }}/manifests/${VERSION}"; then
-            echo "::warning title=Image not public::${IMAGE}:${VERSION} cannot be pulled anonymously. Make the package public in its settings."
+               "https://ghcr.io/v2/${repo}/manifests/${VERSION}"; then
+            echo "Image ${IMAGE}:${VERSION} is public." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error title=Image not public::${IMAGE}:${VERSION} cannot be pulled anonymously. Make the package public in its package settings on GitHub, then re-run this job."
             ok=false
           fi
-          $ok && echo "Chart and image are public." >> "$GITHUB_STEP_SUMMARY"
+          if [[ $ok != true ]]; then
+            exit 1
+          fi

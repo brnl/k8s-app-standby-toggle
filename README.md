@@ -502,7 +502,9 @@ version: `appVersion` must equal `version`, and the chart's image tag follows
    with cosign, SBOM and provenance) and the chart
    `oci://ghcr.io/brnl/charts/k8s-app-standby-toggle` version `X.Y.Z`
    (signed), tags the commit and creates a GitHub release. Every push to
-   `main` also publishes an `edge` image.
+   `main` also publishes an `edge` image, and checks that the current chart
+   and image can be pulled without credentials (a new GHCR package can start
+   private; make it public once in its settings).
 
 Verify a release:
 
