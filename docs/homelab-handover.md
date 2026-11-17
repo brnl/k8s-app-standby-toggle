@@ -29,8 +29,12 @@ alert silencing. This document is self-contained; the
 | --- | --- |
 | Repository | `github.com/brnl/k8s-app-standby-toggle` (public) |
 | Chart | `oci://ghcr.io/brnl/charts/k8s-app-standby-toggle`, version `0.1.0` (public, cosign-signed) |
-| Image | `ghcr.io/brnl/k8s-app-standby-toggle:0.1.0` (amd64, arm64, armv7; cosign-signed; SBOM and provenance) |
+| Image | `ghcr.io/brnl/k8s-app-standby-toggle:0.1.0`, also tagged `0.1` and `latest` (amd64, arm64, arm/v7; cosign-signed; SBOM and provenance attestations) |
 | Release notes | GitHub release `v0.1.0` |
+
+Both packages were checked to be pullable without credentials after the
+release, and the release workflow checks that again on every push to `main`
+(it fails, with a pointer to the package settings, if either is private).
 
 The chart's image tag follows `appVersion`, which equals the chart `version`:
 Renovate bumping the chart version is also the image bump. The image digest
@@ -344,6 +348,6 @@ Deliberate, small, and documented in the README:
   `conflict`.
 - Single replica, single cluster, no leader election, development clusters
   only (as specified).
-- If GHCR ever reports a new package as private, make it public once in the
-  package settings; the release workflow warns when the chart or image
-  cannot be pulled anonymously.
+- If a future package is created private on GHCR, the release workflow's
+  `public` job fails; make the package public once in its settings and
+  re-run the job.
