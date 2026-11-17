@@ -1,0 +1,19 @@
+k8s-app-standby-toggle manages these groups:
+{{- range $name := keys .Values.groups | sortAlpha }}
+{{- $g := get $.Values.groups $name }}
+  - {{ $name }} ({{ $g.default }}): {{ join ", " $g.apps }}
+{{- end }}
+
+Prerequisite: Argo CD must ignore /spec/replicas on Deployments and
+StatefulSets of these Applications and sync with RespectIgnoreDifferences=true,
+or it will undo every sleep (the group then ends in "conflict").
+
+Follow the logs:
+  kubectl logs -n {{ .Release.Namespace }} deploy/{{ include "standby.fullname" . }} -f
+{{- if and .Values.httpRoute.enabled .Values.httpRoute.hostnames }}
+
+Open the UI: https://{{ first .Values.httpRoute.hostnames }}/
+{{- end }}
+
+Runtime state (overrides, leases, holds) lives in the ConfigMap
+{{ include "standby.stateConfigMap" . }}, created by the service.

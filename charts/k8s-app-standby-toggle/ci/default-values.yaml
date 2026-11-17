@@ -1,0 +1,8 @@
+groups:
+  vikunja:
+    default: awake
+    apps: [vikunja, vikunja-infra]
+oidc:
+  issuerURL: https://auth.example.com
+  redirectURL: https://standby.example.com/auth/callback
+  allowedGroups: [admins]

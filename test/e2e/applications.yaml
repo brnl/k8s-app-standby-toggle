@@ -1,0 +1,25 @@
+# Hand-made Argo CD Applications: only status.resources matters to the
+# service. Argo CD itself is not installed.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: demo
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  source:
+    repoURL: https://example.invalid/demo.git
+    path: .
+status:
+  resources:
+    - {group: apps, version: v1, kind: Deployment, namespace: demo, name: web}
+    - {group: apps, version: v1, kind: Deployment, namespace: demo, name: worker}
+    - {group: apps, version: v1, kind: StatefulSet, namespace: demo, name: cache}
+    - {group: batch, version: v1, kind: CronJob, namespace: demo, name: cleanup}
+    - {group: apps, version: v1, kind: DaemonSet, namespace: demo, name: agent}
+    - {version: v1, kind: Service, namespace: demo, name: web}
+    # Protected namespace: never touched.
+    - {group: apps, version: v1, kind: Deployment, namespace: kube-system, name: coredns}

@@ -1,0 +1,10 @@
+{{- include "standby.validate" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "standby.fullname" . }}-groups
+  labels:
+    {{- include "standby.labels" . | nindent 4 }}
+data:
+  groups.json: |
+    {{- .Values.groups | toPrettyJson | nindent 4 }}
