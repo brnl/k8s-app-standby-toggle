@@ -140,7 +140,12 @@ step "Without the Argo CD prerequisite the group ends in conflict, and the servi
 ( while true; do kubectl -n demo scale deploy/web --replicas=2 >/dev/null 2>&1; sleep 2; done ) &
 fighter=$!
 wait_for 120 "phase conflict" phase_is .phase conflict
-kill $fighter
+kill "$fighter"
+wait "$fighter" 2>/dev/null || true
+# The fighter may have stopped before or after the service's last scale-down;
+# give the other controller the last word, then check that the service
+# leaves it alone for three reconcile intervals.
+kubectl -n demo scale deploy/web --replicas=2
 sleep 15
 [[ $(replicas deploy/web) == 2 ]] || fail "the service kept acting on a group in conflict"
 curl -s "http://127.0.0.1:$port/metrics" | grep -q 'k8s_app_standby_toggle_group_conflict{group="demo"} 1' || fail "conflict metric"
